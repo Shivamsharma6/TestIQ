@@ -21,8 +21,8 @@ struct ParticleBurst: View {
     }
 
     var body: some View {
-        if Motion.enabled, self.token > 0 {
-            TimelineView(.animation) { timeline in
+        if Motion.enabled, self.started != nil {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
                 Canvas { context, size in
                     let now = self.started ?? timeline.date
                     let elapsed = timeline.date.timeIntervalSince(now)
@@ -57,9 +57,18 @@ struct ParticleBurst: View {
                         )
                     }
                 }
-                .onChange(of: self.token) { _, _ in self.started = timeline.date }
+
             }
         }
+        Color.clear
+            .frame(width: 0, height: 0)
+            .task(id: self.token) {
+                guard Motion.enabled, self.token > 0 else { self.started = nil; return }
+                self.started = Date()
+                do { try await Task.sleep(for: .milliseconds(850)) } catch { return }
+                self.started = nil
+            }
+            .accessibilityHidden(true)
     }
 
     private static func make(count: Int) -> [Particle] {

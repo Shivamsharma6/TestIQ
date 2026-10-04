@@ -1,82 +1,72 @@
 import SwiftUI
 
-/// The single source of truth for colour, type and spacing.
-///
-/// The palette is deliberately not built on red/green as a correctness signal: those two
-/// are indistinguishable to the most common form of colour blindness. Correctness is
-/// therefore always carried by three channels at once — colour, an SF Symbol, and motion.
+/// Shared arcade palette. Correctness also uses a symbol and a written label, so a
+/// player's result never depends on distinguishing two colours.
 enum Theme {
     // MARK: - Surfaces
 
-    static let background = Color(red: 0.043, green: 0.055, blue: 0.098)
-    static let surface = Color(red: 0.086, green: 0.102, blue: 0.161)
-    static let surfaceRaised = Color(red: 0.125, green: 0.145, blue: 0.212)
+    static let background = Color(red: 0.047, green: 0.043, blue: 0.075)
+    static let surface = Color(red: 0.102, green: 0.094, blue: 0.145)
+    static let surfaceRaised = Color(red: 0.153, green: 0.137, blue: 0.212)
     static let stroke = Color.white.opacity(0.10)
-    static let strokeStrong = Color.white.opacity(0.20)
+    static let strokeStrong = Color.white.opacity(0.23)
 
     // MARK: - Text
 
-    static let textPrimary = Color.white
-    static let textSecondary = Color.white.opacity(0.68)
-    static let textTertiary = Color.white.opacity(0.42)
+    static let textPrimary = Color(red: 0.98, green: 0.98, blue: 1.00)
+    static let textSecondary = Color(red: 0.77, green: 0.76, blue: 0.84)
+    static let textTertiary = Color(red: 0.63, green: 0.62, blue: 0.71)
 
     // MARK: - Semantic
 
-    /// Amber, not red, for "that was wrong". Distinct in hue *and* lightness from the
-    /// success colour, and paired with an xmark symbol everywhere it appears.
-    static let correct = Color(red: 0.35, green: 0.85, blue: 0.62)
-    static let incorrect = Color(red: 1.00, green: 0.58, blue: 0.32)
-    static let accent = Color(red: 0.55, green: 0.60, blue: 1.00)
-    static let hint = Color(red: 1.00, green: 0.82, blue: 0.42)
+    static let lime = Color(red: 0.82, green: 1.00, blue: 0.36)
+    static let violet = Color(red: 0.69, green: 0.57, blue: 1.00)
+    static let correct = lime
+    static let incorrect = Color(red: 1.00, green: 0.62, blue: 0.42)
+    static let accent = lime
+    static let hint = Color(red: 1.00, green: 0.84, blue: 0.43)
 
     // MARK: - Floor accents
 
     static func accent(named name: String) -> Color {
         switch name {
-        case "mint": return Color(red: 0.36, green: 0.90, blue: 0.72)
-        case "sky": return Color(red: 0.40, green: 0.75, blue: 1.00)
-        case "violet": return Color(red: 0.68, green: 0.56, blue: 1.00)
-        case "amber": return Color(red: 1.00, green: 0.76, blue: 0.38)
-        case "coral": return Color(red: 1.00, green: 0.55, blue: 0.52)
-        case "teal": return Color(red: 0.32, green: 0.88, blue: 0.86)
-        case "indigo": return Color(red: 0.52, green: 0.58, blue: 1.00)
-        case "blue": return Color(red: 0.35, green: 0.62, blue: 1.00)
-        case "pink": return Color(red: 1.00, green: 0.52, blue: 0.78)
-        case "gold": return Color(red: 1.00, green: 0.83, blue: 0.35)
+        case "mint": return self.lime
+        case "sky": return Color(red: 0.43, green: 0.81, blue: 1.00)
+        case "violet": return self.violet
+        case "amber": return Color(red: 1.00, green: 0.77, blue: 0.38)
+        case "coral": return Color(red: 1.00, green: 0.59, blue: 0.61)
+        case "teal": return Color(red: 0.32, green: 0.91, blue: 0.86)
+        case "indigo": return Color(red: 0.66, green: 0.65, blue: 1.00)
+        case "blue": return Color(red: 0.44, green: 0.71, blue: 1.00)
+        case "pink": return Color(red: 1.00, green: 0.58, blue: 0.83)
+        case "gold": return self.hint
         default: return self.accent
         }
     }
 
-    /// Colour for a 0–1 value on the report's domain bars. Deliberately a single-hue
-    /// ramp from amber to mint so a bar's colour encodes magnitude, not category.
+    /// A continuous magnitude scale for practice charts.
     static func scale(for value: Double) -> Color {
         let t = max(0, min(1, value))
-        return Color(
-            red: 0.95 - 0.55 * t,
-            green: 0.62 + 0.22 * t,
-            blue: 0.35 + 0.30 * t
-        )
+        return Color(red: 1.00 - 0.18 * t, green: 0.65 + 0.35 * t, blue: 0.42 - 0.06 * t)
     }
 
     // MARK: - Metrics
 
     enum Metrics {
-        static let corner: CGFloat = 20
-        static let cornerLarge: CGFloat = 28
+        static let corner: CGFloat = 22
+        static let cornerLarge: CGFloat = 30
         static let gutter: CGFloat = 20
-        static let stackSpacing: CGFloat = 14
-        /// Apple's minimum comfortable hit target. Enforced on every control.
+        static let stackSpacing: CGFloat = 16
         static let minTarget: CGFloat = 44
     }
 }
 
 extension Font {
     static func app(_ style: Font.TextStyle, size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .rounded)
+        .system(style, design: .rounded, weight: weight)
             .leading(.standard)
     }
 
-    /// Tabular figures keep counting timers from jittering as digits change width.
     static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
         .system(size: size, weight: weight, design: .rounded).monospacedDigit()
     }

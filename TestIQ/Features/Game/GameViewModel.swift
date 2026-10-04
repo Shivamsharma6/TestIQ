@@ -10,6 +10,8 @@ import SwiftUI
 @Observable
 final class GameViewModel {
     enum Phase: Equatable {
+        /// First-use practice has no score and no running question clock.
+        case warmup(PuzzleInteraction.Lesson)
         /// Sequential flash for an echo item.
         case presenting(step: Int, total: Int)
         /// Everything lit at once for a grid item.
@@ -40,13 +42,17 @@ final class GameViewModel {
     private(set) var hintsUsedOnCurrentItem = 0
     private(set) var showHint = false
     private(set) var lastAnswerCorrect: Bool?
+    private(set) var earnedPoints = 0
+    private(set) var lastAnswerTimedOut = false
+    private(set) var isSuspended = false
 
     // Draft answers for the non-choice archetypes.
     private(set) var selectedOptionIndex: Int?
     private(set) var tappedIndices: [Int] = []
     private(set) var chosenOrder: [Int] = []
-    private(set) var submittedLetters: [String] = []
-    private(set) var usedTileIndices: Set<Int> = []
+    private var wordDraft = WordTileDraft()
+    var submittedLetters: [String] { self.wordDraft.letters(in: self.puzzle.tiles) }
+    var usedTileIndices: Set<Int> { Set(self.wordDraft.indices) }
 
     /// Bumped on each answer so the view can fire a one-shot effect exactly once.
     private(set) var burstToken = 0
@@ -55,6 +61,9 @@ final class GameViewModel {
     private var items: [ItemResult] = []
     private var clock: Timer?
     private var presentation: Task<Void, Never>?
+    private var learnedInteractions: Set<String>
+    private let onInteractionLearned: (String) -> Void
+    private var isActive = false
 
     // MARK: - Derived
 
@@ -75,12 +84,16 @@ final class GameViewModel {
         switch self.phase {
         case .presenting(let step, let total): return .presenting(step: step, total: total)
         case .presentingAll: return .presentingAll
-        default: return .collecting
+        case .awaitingAnswer: return .collecting
+        default: return .finished
         }
     }
 
-    init(level: LevelDefinition, attempt: Int, ability: Double?) {
+    init(level: LevelDefinition, attempt: Int, ability: Double?, learnedInteractions: Set<String> = [],
+         onInteractionLearned: @escaping (String) -> Void = { _ in }) {
         self.level = level
+        self.learnedInteractions = learnedInteractions
+        self.onInteractionLearned = onInteractionLearned
         self.abilityUsed = level.isAdaptive ? ability : nil
         self.timeRemaining = level.perItemLimit
         self.hintsRemaining = level.hintCharges
@@ -96,18 +109,49 @@ final class GameViewModel {
     // MARK: - Lifecycle
 
     func start() {
+        guard !self.isActive else { return }
+        self.isActive = true
         HapticsEngine.shared.prepare()
         self.beginCurrentItem()
     }
 
     func stop() {
+        self.isActive = false
+        self.cancelTiming()
+    }
+
+    private func cancelTiming() {
         self.clock?.invalidate()
         self.clock = nil
         self.presentation?.cancel()
         self.presentation = nil
     }
 
+    /// Pause whenever play is hidden by the system. Returning never consumes a hidden
+    /// answer window or resumes half a memory presentation.
+    func suspend() {
+        guard self.isActive, !self.isSuspended else { return }
+        if self.phase == .awaitingAnswer {
+            self.timeRemaining = max(0, self.puzzle.timeLimit - Date().timeIntervalSince(self.itemStartedAt))
+        }
+        self.isSuspended = true
+        self.cancelTiming()
+    }
+
+    func resume() {
+        guard self.isActive, self.isSuspended else { return }
+        self.isSuspended = false
+        switch self.phase {
+        case .presenting, .presentingAll: self.runMemoryPresentation()
+        case .awaitingAnswer:
+            self.itemStartedAt = Date().addingTimeInterval(-(self.puzzle.timeLimit - self.timeRemaining))
+            self.startClock()
+        default: break
+        }
+    }
+
     private func beginCurrentItem() {
+        self.cancelTiming()
         self.itemStartedAt = Date()
         self.timeRemaining = self.puzzle.timeLimit
         self.hintsUsedOnCurrentItem = 0
@@ -115,10 +159,28 @@ final class GameViewModel {
         self.selectedOptionIndex = nil
         self.tappedIndices = []
         self.chosenOrder = []
-        self.submittedLetters = []
-        self.usedTileIndices = []
+        self.wordDraft = WordTileDraft()
         self.lastAnswerCorrect = nil
+        self.earnedPoints = 0
+        self.lastAnswerTimedOut = false
 
+        let lesson = PuzzleInteraction.Lesson.forKind(self.puzzle.kind)
+        if !self.learnedInteractions.contains(lesson.rawValue) {
+            self.phase = .warmup(lesson)
+        } else {
+            self.activateCurrentItem()
+        }
+    }
+
+    func completeWarmup() {
+        guard self.isActive, !self.isSuspended, case .warmup(let lesson) = self.phase else { return }
+        self.learnedInteractions.insert(lesson.rawValue)
+        self.onInteractionLearned(lesson.rawValue)
+        self.activateCurrentItem()
+    }
+
+    private func activateCurrentItem() {
+        self.itemStartedAt = Date()
         if self.isEcho || self.isGridRecall {
             self.runMemoryPresentation()
         } else {
@@ -130,6 +192,7 @@ final class GameViewModel {
     // MARK: - Clock
 
     private func startClock() {
+        guard self.isActive, !self.isSuspended else { return }
         self.clock?.invalidate()
         let limit = self.puzzle.timeLimit
         let startedAt = self.itemStartedAt
@@ -140,7 +203,7 @@ final class GameViewModel {
         // never make the timer drift.
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
-                guard let self, self.phase == .awaitingAnswer else {
+                guard let self, self.isActive, !self.isSuspended, self.phase == .awaitingAnswer else {
                     timer.invalidate()
                     return
                 }
@@ -179,7 +242,8 @@ final class GameViewModel {
             let hold = spec.lit.count >= 5 ? 1.05 : 0.85
             SoundEngine.shared.selection()
             self.presentation = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(hold))
+                do { try await Task.sleep(for: .seconds(hold)) } catch { return }
+                guard !Task.isCancelled else { return }
                 self?.finishPresentation()
             }
             return
@@ -190,23 +254,21 @@ final class GameViewModel {
         self.presentation = Task { [weak self] in
             for (offset, _) in indices.enumerated() {
                 guard !Task.isCancelled else { return }
-                await MainActor.run { [weak self] in
-                    guard let self, case .presenting = self.phase else { return }
-                    self.phase = .presenting(step: offset, total: indices.count)
-                }
+                guard let self, self.isActive, !self.isSuspended, case .presenting = self.phase else { return }
+                self.phase = .presenting(step: offset, total: indices.count)
                 SoundEngine.shared.selection()
-                try? await Task.sleep(for: .milliseconds(460))
-                await MainActor.run { [weak self] in
-                    guard let self, case .presenting = self.phase else { return }
-                    self.phase = .presenting(step: -1, total: indices.count)
-                }
-                try? await Task.sleep(for: .milliseconds(210))
+                do { try await Task.sleep(for: .milliseconds(460)) } catch { return }
+                guard !Task.isCancelled, self.isActive, !self.isSuspended else { return }
+                self.phase = .presenting(step: -1, total: indices.count)
+                do { try await Task.sleep(for: .milliseconds(210)) } catch { return }
             }
+            guard !Task.isCancelled else { return }
             self?.finishPresentation()
         }
     }
 
     private func finishPresentation() {
+        guard self.isActive, !self.isSuspended else { return }
         // Accept either presenting phase. (An earlier `guard case .presenting ..., case
         // .presentingAll ...` could never both be true, which silently left every memory
         // item stuck on the presentation screen with no way to answer.)
@@ -224,41 +286,39 @@ final class GameViewModel {
     // MARK: - Interaction
 
     func choose(option index: Int) {
-        guard self.phase == .awaitingAnswer, self.selectedOptionIndex == nil else { return }
+        guard !self.isSuspended, self.phase == .awaitingAnswer, self.selectedOptionIndex == nil,
+              self.puzzle.options.indices.contains(index) else { return }
         self.selectedOptionIndex = index
         self.submit(timedOut: false)
     }
 
     func tap(tile index: Int) {
-        guard self.phase == .awaitingAnswer, !self.tappedIndices.contains(index) else { return }
-        guard case .tapSequence(let expected) = self.puzzle.answer else { return }
-        self.tappedIndices.append(index)
+        guard !self.isSuspended, self.phase == .awaitingAnswer,
+              case .memory(let spec) = self.puzzle.stimulus, (0..<spec.cellCount).contains(index),
+              case .tapSequence(let expected) = self.puzzle.answer else { return }
+        let next = PuzzleInteraction.memoryTap(index, current: self.tappedIndices,
+                                              expected: expected, gridRecall: self.isGridRecall)
+        guard next.indices != self.tappedIndices else { return }
+        self.tappedIndices = next.indices
         HapticsEngine.shared.tick()
-
-        if self.isGridRecall {
-            // Order does not matter here, so the only commitment point is a full set.
-            if self.tappedIndices.count == expected.count { self.submit(timedOut: false) }
-        } else {
-            // Echo is strictly serial: one wrong tap ends the item, because continuing
-            // after a mistake measures nothing.
-            let prefix = Array(expected.prefix(self.tappedIndices.count))
-            if self.tappedIndices != prefix { self.submit(timedOut: false) }
-        }
+        SoundEngine.shared.selection()
+        if next.shouldSubmit { self.submit(timedOut: false) }
     }
 
     func undoLastTap() {
-        guard self.phase == .awaitingAnswer else { return }
+        guard !self.isSuspended, self.phase == .awaitingAnswer else { return }
         if !self.tappedIndices.isEmpty {
             self.tappedIndices.removeLast()
-        } else if let last = self.submittedLetters.popLast() {
-            if let index = self.puzzle.tiles.lastIndex(of: last) { self.usedTileIndices.remove(index) }
+        } else if !self.wordDraft.indices.isEmpty {
+            self.wordDraft.undo(tiles: self.puzzle.tiles)
         } else if !self.chosenOrder.isEmpty {
             self.chosenOrder.removeLast()
         }
     }
 
     func tapOrder(labelIndex: Int) {
-        guard self.phase == .awaitingAnswer else { return }
+        guard !self.isSuspended, self.phase == .awaitingAnswer,
+              self.puzzle.orderLabels.indices.contains(labelIndex) else { return }
         // Tapping the most recent entry removes it, so the tap target stays large and the
         // player never needs a small "back" affordance on this interaction.
         if let existing = self.chosenOrder.lastIndex(of: labelIndex) {
@@ -275,10 +335,10 @@ final class GameViewModel {
     }
 
     func tapTile(_ index: Int) {
-        guard self.phase == .awaitingAnswer, index < self.puzzle.tiles.count else { return }
+        guard !self.isSuspended, self.phase == .awaitingAnswer,
+              self.puzzle.tiles.indices.contains(index) else { return }
         guard !self.usedTileIndices.contains(index) else { return }
-        self.usedTileIndices.insert(index)
-        self.submittedLetters.append(self.puzzle.tiles[index])
+        self.wordDraft.append(index, tiles: self.puzzle.tiles)
         HapticsEngine.shared.tick()
         // The last tile is the only commitment point, so a half-built word can always be
         // corrected without penalty.
@@ -288,7 +348,7 @@ final class GameViewModel {
     }
 
     func useHint() {
-        guard self.phase == .awaitingAnswer, self.hintsRemaining > 0, !self.showHint else { return }
+        guard !self.isSuspended, self.phase == .awaitingAnswer, self.hintsRemaining > 0, !self.showHint else { return }
         self.hintsRemaining -= 1
         self.hintsUsedOnCurrentItem += 1
         self.showHint = true
@@ -333,7 +393,8 @@ final class GameViewModel {
             let hintFactor = self.hintsUsedOnCurrentItem > 0
                 ? max(0.4, 1.0 - 0.3 * Double(self.hintsUsedOnCurrentItem)) : 1.0
             let speedFactor = max(0.4, 1.0 - 0.5 * (elapsed / max(self.puzzle.timeLimit, 1)))
-            self.score += Int((100 * Double(self.comboMultiplier) * hintFactor * speedFactor).rounded())
+            self.earnedPoints = Int((100 * Double(self.comboMultiplier) * hintFactor * speedFactor).rounded())
+            self.score += self.earnedPoints
             HapticsEngine.shared.correctWithStreak(self.streak)
             SoundEngine.shared.correct(streak: self.streak)
             self.burstToken += 1
@@ -345,6 +406,7 @@ final class GameViewModel {
         }
 
         self.lastAnswerCorrect = correct
+        self.lastAnswerTimedOut = timedOut
         self.phase = .showingFeedback(correct: correct)
     }
 
@@ -353,7 +415,7 @@ final class GameViewModel {
         case .optionIndex(let expected):
             return self.selectedOptionIndex == expected
         case .tapSequence(let expected):
-            return self.tappedIndices == expected
+            return PuzzleInteraction.memoryMatches(self.tappedIndices, expected: expected, gridRecall: self.isGridRecall)
         case .ordering(let expected):
             return self.chosenOrder == expected
         case .word(let expected):

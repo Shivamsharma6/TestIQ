@@ -1,330 +1,324 @@
 import SwiftUI
 
-/// The assessment report.
-///
-/// Arranged as a reveal rather than a wall: score first, then profile, then the specific
-/// advice. Sections fade in as they scroll into view so the screen does not arrive all at
-/// once and get skimmed.
+/// Practice history and personal records are deliberately separate: a replay is useful
+/// evidence even when it does not beat an earlier score.
 struct ReportView: View {
     @Environment(AppState.self) private var app
-    @State private var radarSweep: Double = 0
-    @State private var appearedSections: Set<String> = []
+    @State private var selectedLevelID: Int?
 
     private var assessment: Assessment { self.app.assessment ?? .empty }
     private var tips: [CoachingTip] { CoachingEngine.tips(for: self.assessment) }
+    private var history: [LevelResult] {
+        self.app.progress.attemptHistory.sorted { $0.completedAt < $1.completedAt }
+    }
+    private var playedLevels: [LevelDefinition] {
+        let recorded = Set(self.history.map(\.levelID))
+        return LevelCatalog.all.filter {
+            recorded.contains($0.id) || self.app.progress.levelResults[$0.id] != nil
+        }
+    }
+    private var focusedLevelID: Int {
+        self.selectedLevelID ?? self.history.last?.levelID ?? self.playedLevels.first?.id ?? 1
+    }
+    private var focusedRounds: [LevelResult] {
+        self.history.filter { $0.levelID == self.focusedLevelID }
+    }
+    private var focusedTrend: PracticeTrend? {
+        ProgressInsights.trends(in: self.history).first { $0.levelID == self.focusedLevelID }
+    }
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            ConfettiView(isActive: self.app.progress.hasFinishedAscent)
-
-            if self.assessment.totalItems == 0 {
-                emptyState
+            if self.playedLevels.isEmpty {
+                self.emptyState
             } else {
-                content
+                self.content
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear {
-            self.app.recomputeAssessment()
-            withAnimation(Motion.enabled ? .spring(response: 0.9, dampingFraction: 0.85) : nil) {
-                self.radarSweep = 1
-            }
-        }
-    }
-
-    // MARK: - Content
-
-    /// Section anchors, so a screen can be opened part-way down. Only reachable via the
-    /// DEBUG launch argument below; production always opens at the top.
-    private enum Section: String { case gauge, profile, strengths, coaching, breakdown }
-
-    private var initialScrollTarget: Section? {
-        #if DEBUG
-        let arguments = ProcessInfo.processInfo.arguments
-        guard let flag = arguments.firstIndex(of: "-uiSection"),
-              arguments.indices.contains(flag + 1),
-              let section = Section(rawValue: arguments[flag + 1]) else { return nil }
-        return section
-        #else
-        return nil
-        #endif
+        .onAppear { self.app.recomputeAssessment() }
     }
 
     private var content: some View {
         ScrollViewReader { proxy in
-        ScrollView {
-            VStack(spacing: 26) {
-                titleBlock
-
-                ScoreGaugeView(
-                    estimate: self.assessment.iqEstimate,
-                    confidenceLow: self.assessment.confidenceLow,
-                    confidenceHigh: self.assessment.confidenceHigh,
-                    percentile: self.assessment.percentile,
-                    band: self.assessment.band
-                )
-                .id(Section.gauge)
-                .appearIn(0.1)
-
-                ReliabilityNoteView(assessment: self.assessment)
-
-                runSummary
-
-                brainProfile
-                    .id(Section.profile)
-
-                strengthsSection
-                    .id(Section.strengths)
-
-                coachingSection
-                    .id(Section.coaching)
-
-                breakdownSection
-                    .id(Section.breakdown)
-
-                footer
-            }
-            .padding(Theme.Metrics.gutter)
-            .padding(.bottom, 40)
-        }
-        .scrollIndicators(.hidden)
-        .onAppear {
-            guard let section = self.initialScrollTarget else { return }
-            proxy.scrollTo(section, anchor: .top)
-        }
-        }
-    }
-
-    private var titleBlock: some View {
-        VStack(spacing: 6) {
-            Text("ASSESSMENT")
-                .font(.app(.caption2, size: 11, weight: .heavy))
-                .tracking(2.2)
-                .foregroundStyle(Theme.accent)
-
-            Text("IQ Ascent Report")
-                .font(.app(.largeTitle, size: 30, weight: .heavy))
-                .foregroundStyle(Theme.textPrimary)
-
-            Text("Recomputed from every floor you have played")
-                .font(.app(.footnote, size: 13, weight: .medium))
-                .foregroundStyle(Theme.textTertiary)
-        }
-        .padding(.top, 16)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-    }
-
-    private var runSummary: some View {
-        GlassCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(self.assessment.headline)
-                    .font(.app(.subheadline, size: 15, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Divider().overlay(Theme.stroke)
-
-                HStack(spacing: 0) {
-                    StatTile(value: "\(self.assessment.totalItems)",
-                             label: "Items answered")
-                    Divider().frame(height: 34).overlay(Theme.stroke)
-                    StatTile(value: "\(Int(self.assessment.overallAccuracy * 100))%",
-                             label: "Accuracy", tint: Theme.correct)
-                    Divider().frame(height: 34).overlay(Theme.stroke)
-                    StatTile(value: "×\(min(5, max(1, self.assessment.bestStreak)))",
-                             label: "Best streak", tint: Theme.incorrect)
-                    Divider().frame(height: 34).overlay(Theme.stroke)
-                    StatTile(value: "\(self.assessment.totalStars)",
-                             label: "Stars", tint: Theme.hint)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    self.header
+                    self.overview.id("gauge")
+                    self.practiceSection.id("profile")
+                    self.coachingSection.id("coaching")
+                    self.recordsSection.id("breakdown")
+                    self.footer
                 }
+                .padding(Theme.Metrics.gutter)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+            .onAppear {
+                #if DEBUG
+                let arguments = ProcessInfo.processInfo.arguments
+                if let flag = arguments.firstIndex(of: "-uiSection"),
+                   arguments.indices.contains(flag + 1) {
+                    proxy.scrollTo(arguments[flag + 1], anchor: .top)
+                }
+                #endif
             }
         }
-        .appearIn(0.05)
     }
 
-    private var brainProfile: some View {
+    private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeading(
-                title: "Your brain profile",
-                subtitle: "Eight axes, indexed 0–100 against the same scale as your headline score",
-                symbol: "circle.hexagongrid.fill"
-            )
-
-            RadarChartView(scores: self.assessment.domainScores, sweep: self.radarSweep)
-                .frame(maxWidth: .infinity)
-
-            VStack(spacing: 12) {
-                ForEach(self.assessment.domainScores) { score in
-                    DomainRowView(score: score)
-                }
+            Button {
+                self.app.goHome()
+            } label: {
+                Label("The ascent", systemImage: "arrow.left")
+                    .font(.app(.subheadline, size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(minHeight: Theme.Metrics.minTarget)
             }
+            .buttonStyle(.plain)
+            .accessibilityHint("Returns to your floor map")
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("YOU VS. YOUR PERSONAL BEST")
+                    .font(.app(.caption2, size: 10, weight: .heavy))
+                    .tracking(1.6)
+                    .foregroundStyle(Theme.accent)
+                Text("Your progress")
+                    .font(.app(.largeTitle, size: 34, weight: .heavy))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Every round gives you something to build on.")
+                    .font(.app(.subheadline, size: 14, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
         }
-        .appearIn(0.1)
     }
 
-    private var strengthsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeading(
-                title: "Where you're strongest",
-                subtitle: self.assessment.strengths.isEmpty
-                    ? "Not enough evidence yet"
-                    : "These are the axes pulling your composite up",
-                symbol: "arrow.up.right.circle.fill"
-            )
+    private var overview: some View {
+        GlassCard(padding: 18, tint: Theme.accent) {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .top, spacing: 12) {
+                    StatTile(value: "\(self.history.count)", label: "Recorded rounds", tint: Theme.accent)
+                    StatTile(value: "\(self.app.progress.totalStars)", label: "Stars earned", tint: Theme.hint)
+                    StatTile(value: "\(self.app.progress.clearedCount)/\(LevelCatalog.count)", label: "Floors cleared")
+                }
 
-            if self.assessment.strengths.isEmpty {
-                Text("Clear more floors and your strongest areas will appear here.")
-                    .font(.app(.footnote, size: 13, weight: .medium))
-                    .foregroundStyle(Theme.textTertiary)
-            } else {
-                ForEach(self.assessment.strengths) { score in
-                    StrengthCard(score: score)
+                if let latest = self.history.last {
+                    Divider().overlay(Theme.stroke)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("LATEST ROUND · FLOOR \(latest.levelID)", systemImage: "flag.checkered")
+                            .font(.app(.caption2, size: 10, weight: .heavy))
+                            .tracking(1)
+                            .foregroundStyle(Theme.accent)
+                        Text(LevelCatalog.level(latest.levelID)?.name ?? "Floor \(latest.levelID)")
+                            .font(.app(.title2, size: 24, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("\(latest.score)")
+                                .font(.mono(44, weight: .heavy))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("POINTS")
+                                .font(.app(.caption2, size: 11, weight: .heavy))
+                                .foregroundStyle(Theme.textSecondary)
+                            Spacer()
+                            StarRating(stars: latest.stars, size: 15)
+                        }
+                        Text("\(latest.correctCount) of \(latest.items.count) correct · \(Int((latest.accuracy * 100).rounded()))% accuracy")
+                            .font(.app(.subheadline, size: 14, weight: .medium))
+                            .foregroundStyle(Theme.textSecondary)
+                        if let best = self.app.progress.personalBestScore(for: latest.levelID) {
+                            Text("Floor \(latest.levelID) personal best: \(best) points")
+                                .font(.app(.footnote, size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                } else {
+                    Text("Your saved records are safe. Play a new round to start your practice timeline.")
+                        .font(.app(.subheadline, size: 14, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
         }
-        .appearIn(0.12)
+    }
+
+    private var practiceSection: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            SectionHeading(title: "Find your next edge", subtitle: "Explore your practice, one floor at a time.", symbol: "chart.bar.xaxis")
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(self.playedLevels) { level in
+                        Button {
+                            self.selectedLevelID = level.id
+                            HapticsEngine.shared.tap()
+                        } label: {
+                            Text("Floor \(level.id)")
+                                .font(.app(.subheadline, size: 13, weight: .bold))
+                                .padding(.horizontal, 16)
+                                .frame(minHeight: Theme.Metrics.minTarget)
+                                .foregroundStyle(self.focusedLevelID == level.id ? Theme.background : Theme.textSecondary)
+                                .background {
+                                    Capsule().fill(self.focusedLevelID == level.id ? Theme.accent : Theme.surface)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Floor \(level.id), \(level.name)")
+                        .accessibilityAddTraits(self.focusedLevelID == level.id ? [.isSelected] : [])
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+
+            PracticeHistoryCard(
+                levelID: self.focusedLevelID,
+                rounds: self.focusedRounds,
+                personalBest: self.app.progress.personalBestScore(for: self.focusedLevelID)
+            )
+
+            if let trend = self.focusedTrend {
+                PracticeTrendCard(trend: trend)
+            } else {
+                self.buildComparisonCard
+            }
+
+            if self.app.progress.isUnlocked(self.focusedLevelID) {
+                QuietButton(title: "Play floor \(self.focusedLevelID) again", systemImage: "arrow.clockwise") {
+                    self.app.open(self.focusedLevelID)
+                }
+            }
+        }
+    }
+
+    private var buildComparisonCard: some View {
+        GlassCard(padding: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Build your comparison")
+                        .font(.app(.headline, size: 16, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(self.comparisonPrompt)
+                        .font(.app(.footnote, size: 13, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var comparisonPrompt: String {
+        let needed = max(0, 4 - self.focusedRounds.count)
+        if needed > 0 {
+            return "Record \(needed) more \(needed == 1 ? "round" : "rounds") here to begin comparing earlier and recent practice. We also need enough similar puzzles in both groups."
+        }
+        return "Keep practicing this floor. There aren’t enough similar puzzles in the earlier and recent groups yet for a fair comparison."
     }
 
     private var coachingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeading(
-                title: "How to improve",
-                subtitle: self.tips.isEmpty
-                    ? "Nothing to flag yet"
-                    : "Specific to what you actually got wrong",
-                symbol: "lightbulb.fill"
+                title: "Your next move",
+                subtitle: self.history.isEmpty
+                    ? "Techniques based on your saved floor records."
+                    : "Techniques based on your latest recorded practice on each floor.",
+                symbol: "bolt.fill"
             )
-
             if self.tips.isEmpty {
                 GlassCard {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("No weak spots flagged")
-                            .font(.app(.headline, size: 15, weight: .bold))
-                            .foregroundStyle(Theme.correct)
-                        Text("""
-                        Every axis is within reach of your composite across \(self.assessment.totalItems) \
-                        answers, and no specific mistake repeated often enough to name. The most \
-                        useful next step is simply more floors — the estimate tightens with every item.
-                        """)
-                        .font(.app(.footnote, size: 13, weight: .medium))
-                        .foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("Keep your rhythm")
+                            .font(.app(.headline, size: 16, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                        Text("Choose a floor, check each rule before answering, and aim for a round with fewer hints. Specific techniques will appear when your answers reveal a pattern to practice.")
+                            .font(.app(.footnote, size: 13, weight: .medium))
+                            .foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             } else {
-                ForEach(self.tips) { tip in
-                    CoachingCardView(tip: tip)
+                ForEach(self.tips) { tip in CoachingCardView(tip: tip) }
+            }
+        }
+    }
+
+    private var recordsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeading(title: "Personal bests", subtitle: "Your highest points and earned stars stay yours.", symbol: "trophy.fill")
+            GlassCard(padding: 16) {
+                VStack(spacing: 16) {
+                    ForEach(self.playedLevels) { level in
+                        HStack(spacing: 12) {
+                            Text(String(format: "%02d", level.id))
+                                .font(.mono(16, weight: .heavy))
+                                .foregroundStyle(Theme.accent)
+                                .frame(width: 30)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(level.name)
+                                    .font(.app(.subheadline, size: 14, weight: .bold))
+                                    .foregroundStyle(Theme.textPrimary)
+                                StarRating(stars: self.app.progress.stars(for: level.id), size: 11)
+                            }
+                            Spacer(minLength: 8)
+                            if let best = self.app.progress.personalBestScore(for: level.id) {
+                                Text("\(best) pts")
+                                    .font(.mono(16, weight: .bold))
+                                    .foregroundStyle(Theme.textPrimary)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
                 }
             }
         }
-        .appearIn(0.15)
-    }
-
-    private var breakdownSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeading(
-                title: "Floor by floor",
-                subtitle: "Your best attempt at each level",
-                symbol: "square.stack.3d.up.fill"
-            )
-
-            LevelBreakdownView(breakdown: self.assessment.levelBreakdown, starTotal: self.assessment.totalStars)
-        }
-        .appearIn(0.18)
     }
 
     private var footer: some View {
-        VStack(spacing: 12) {
-            if !self.app.progress.hasFinishedAscent {
-                let next = self.app.progress.nextLevelID
-                if let level = LevelCatalog.level(next) {
-                    PrimaryButton(
-                        title: "Play floor \(next): \(level.name)",
-                        systemImage: "arrow.up",
-                        tint: Theme.accent
-                    ) {
-                        self.app.open(next)
-                    }
+        VStack(spacing: 14) {
+            PrimaryButton(
+                title: self.app.progress.hasFinishedAscent ? "Choose your next challenge" : "Continue the ascent",
+                systemImage: "play.fill"
+            ) {
+                if self.app.progress.hasFinishedAscent {
+                    self.app.goHome()
+                } else {
+                    self.app.open(self.app.progress.nextLevelID)
                 }
             }
-
-            QuietButton(title: "Back to the path", systemImage: "chevron.down") {
-                self.app.goHome()
-            }
-
-            Text("Generated \(self.assessment.generatedAt.formatted(date: .abbreviated, time: .shortened))")
-                .font(.app(.caption2, size: 10, weight: .medium))
+            Text("These are your results in TestIQ puzzles. Practice gains here do not measure or guarantee a change in IQ.")
+                .font(.app(.caption, size: 12, weight: .medium))
                 .foregroundStyle(Theme.textTertiary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 8)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Image(systemName: "chart.dots.scatter")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Theme.textTertiary)
-            Text("No assessment yet")
-                .font(.app(.title2, size: 22, weight: .bold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("Play a floor and your profile will start building here.")
-                .font(.app(.subheadline, size: 14, weight: .medium))
-                .foregroundStyle(Theme.textTertiary)
-                .multilineTextAlignment(.center)
-            PrimaryButton(title: "Start floor 1", systemImage: "arrow.up") {
-                self.app.open(1)
-            }
-            .padding(.horizontal, 40)
-            QuietButton(title: "Back", systemImage: "chevron.down") { self.app.goHome() }
-            Spacer()
-        }
-    }
-}
-
-/// A strength, framed as something to build on rather than just a high score.
-private struct StrengthCard: View {
-    let score: DomainScore
-
-    var body: some View {
-        GlassCard(padding: 15, tint: Theme.correct) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: self.score.domain.symbol)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Theme.correct)
-                    .frame(width: 32, height: 32)
-                    .background { Circle().fill(Theme.correct.opacity(0.14)) }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack {
-                        Text(self.score.domain.title)
-                            .font(.app(.headline, size: 15, weight: .bold))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                self.header
+                GlassCard(padding: 24, tint: Theme.accent) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Image(systemName: "chart.bar.xaxis")
+                            .font(.system(size: 46, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                        Text("Your first round starts the story.")
+                            .font(.app(.title, size: 30, weight: .heavy))
                             .foregroundStyle(Theme.textPrimary)
-                        Spacer()
-                        Text("\(Int(self.score.index))")
-                            .font(.mono(16, weight: .heavy))
-                            .foregroundStyle(Theme.correct)
+                        Text("Play a floor to set a personal best. Return for your recent rounds, useful techniques, and fair comparisons as your practice builds.")
+                            .font(.app(.subheadline, size: 15, weight: .medium))
+                            .foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        PrimaryButton(title: "Play floor 1", systemImage: "play.fill") {
+                            self.app.open(1)
+                        }
                     }
-
-                    Text(self.score.domain.blurb)
-                        .font(.app(.footnote, size: 13, weight: .medium))
-                        .foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Text("""
-                    Indexed \(Int(self.score.index))/100 from \(self.score.itemCount) \
-                    \(self.score.itemCount == 1 ? "item" : "items") at \
-                    \(Int(self.score.accuracy * 100))% accuracy. This is the axis most worth \
-                    protecting — the other seven are easier to move than this one is to keep.
-                    """)
-                    .font(.app(.caption2, size: 11, weight: .medium))
-                    .foregroundStyle(Theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .padding(Theme.Metrics.gutter)
         }
-        .accessibilityElement(children: .combine)
     }
 }

@@ -30,17 +30,10 @@ struct TimerRing: View {
                 .rotationEffect(.degrees(-90))
                 .animation(Motion.enabled ? .linear(duration: 0.1) : nil, value: self.fraction)
 
-            if self.urgent {
-                Image(systemName: "hourglass")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(self.ringColor)
-                    .transition(.scale.combined(with: .opacity))
-            } else {
-                Text(String(Int(ceil(self.seconds))))
-                    .font(.mono(17, weight: .bold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .contentTransition(.numericText(countsDown: true))
-            }
+            Text(String(Int(ceil(self.seconds))))
+                .font(.mono(17, weight: .bold))
+                .foregroundStyle(self.urgent ? self.ringColor : Theme.textPrimary)
+                .contentTransition(.numericText(countsDown: true))
         }
         .frame(width: self.size, height: self.size)
         .animation(Motion.enabled ? Motion.snappy : nil, value: self.urgent)
@@ -79,12 +72,20 @@ struct HUDView: View {
                         .tracking(1.4)
                         .foregroundStyle(self.accent)
                     Spacer()
-                    Text(self.model.summaryLine)
+                    Text("\(self.model.index + 1)/\(self.model.puzzles.count)")
                         .font(.mono(12, weight: .medium))
                         .foregroundStyle(Theme.textTertiary)
+                        .accessibilityLabel(self.model.summaryLine)
                 }
 
                 ProgressTrack(progress: self.model.progress, tint: self.accent)
+
+                Text("\(self.model.score.formatted()) PTS")
+                    .font(.mono(14, weight: .heavy))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.numericText())
+                    .accessibilityLabel("Score: \(self.model.score) points")
 
                 if self.model.streak >= 2 {
                     ComboBadge(streak: self.model.streak, multiplier: self.model.comboMultiplier)
@@ -112,7 +113,7 @@ struct HUDView: View {
                 .background { Circle().fill(Theme.surface) }
             }
             .buttonStyle(.plain)
-            .disabled(self.model.hintsRemaining == 0 || self.model.phase != .awaitingAnswer)
+            .disabled(self.model.hintsRemaining == 0 || self.model.showHint || self.model.phase != .awaitingAnswer)
             .opacity(self.model.hintsRemaining == 0 ? 0.5 : 1)
             .accessibilityLabel("Use a hint")
             .accessibilityValue("\(self.model.hintsRemaining) remaining")

@@ -65,7 +65,6 @@ struct MemoryGridView: View {
         let isSelected = self.selected.contains(index)
 
         Button {
-            HapticsEngine.shared.tick()
             self.onTap?(index)
         } label: {
             ZStack {
@@ -80,14 +79,18 @@ struct MemoryGridView: View {
                     Image(systemName: self.isSequence ? "bolt.fill" : "circle.fill")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Color.black.opacity(0.7))
+                } else {
+                    Text("\(index + 1)")
+                        .font(.mono(16, weight: .semibold))
+                        .foregroundStyle(isSelected ? self.accent : Theme.textTertiary)
                 }
             }
             .aspectRatio(1, contentMode: .fit)
-            .scaleEffect(isLit ? 1.03 : 1)
+            .scaleEffect(Motion.enabled && isLit ? 1.03 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(self.phase == .finished)
+        .disabled(self.phase != .collecting)
         .accessibilityLabel("Tile \(index + 1)")
         .accessibilityValue(isLit ? "lit" : (isSelected ? "selected" : "not selected"))
         .accessibilityHint("Double tap to select")

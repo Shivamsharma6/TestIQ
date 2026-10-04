@@ -28,7 +28,14 @@ final class SoundEngine {
     private var isGraphUsable = false
 
     var isEnabled = true {
-        didSet { if self.isEnabled { self.startIfNeeded() } }
+        didSet {
+            if self.isEnabled {
+                self.startIfNeeded()
+            } else {
+                self.player.stop()
+                self.isRunning = false
+            }
+        }
     }
 
     private init() {
@@ -44,7 +51,7 @@ final class SoundEngine {
             object: engine,
             queue: .main
         ) { [weak self] _ in
-            self?.handleConfigurationChange()
+            Task { @MainActor [weak self] in self?.handleConfigurationChange() }
         }
     }
 
@@ -52,8 +59,7 @@ final class SoundEngine {
     /// Thread Performance Checker "AVAudioSession Hang Risk" warnings and UI stutters.
     nonisolated private static func configureSessionInBackground() {
         let session = AVAudioSession.sharedInstance()
-        // `.ambient` means a puzzle game's audio ducks politely under music instead of
-        // interrupting it, which is what players expect.
+        // Ambient cues respect silent mode and mix with the player's music.
         try? session.setCategory(.ambient, options: [.mixWithOthers])
         try? session.setActive(true)
     }
@@ -79,9 +85,7 @@ final class SoundEngine {
                         try self.engine.start()
                     }
                     if !self.player.isPlaying {
-                        if (try? self.player.playAudio()) == nil {
-                            self.player.play()
-                        }
+                        try self.player.playAudio()
                     }
                     self.isRunning = self.engine.isRunning && self.player.isPlaying
                 } catch {
@@ -113,6 +117,10 @@ final class SoundEngine {
     func levelCleared() {
         let root = 392.0
         self.play(self.arppeggio(root: root, notes: 5, noteLength: 0.10, decay: 0.55, ascending: true))
+    }
+
+    func personalRecord() {
+        self.play(self.arppeggio(root: 587.33, notes: 5, noteLength: 0.09, decay: 0.35))
     }
 
     func selection() {
@@ -195,11 +203,8 @@ final class SoundEngine {
         // Every condition is re-checked immediately before scheduling. `scheduleBuffer`
         // raises an uncaught Objective-C exception when the node is not playing, so this
         // guard is load-bearing rather than defensive.
+        guard self.isGraphUsable, self.isRunning, self.engine.isRunning,
+              self.player.isPlaying else { return }
         self.player.scheduleBuffer(buffer, at: nil, options: .interrupts)
-        if !self.player.isPlaying {
-            if (try? self.player.playAudio()) == nil {
-                self.player.play()
-            }
-        }
     }
 }

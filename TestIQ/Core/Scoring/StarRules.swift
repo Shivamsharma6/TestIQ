@@ -31,8 +31,8 @@ public enum StarRules {
 
         var stars = 0
         if accuracy >= level.starGate { stars = 1 }
-        if accuracy >= Self.twoStarAccuracy { stars = 2 }
-        if accuracy >= Self.threeStarAccuracy && clockLeft >= Self.threeStarClockRemaining { stars = 3 }
+        if stars > 0 && accuracy >= Self.twoStarAccuracy { stars = 2 }
+        if stars > 0 && accuracy >= Self.threeStarAccuracy && clockLeft >= Self.threeStarClockRemaining { stars = 3 }
 
         return LevelResult(
             id: "L\(level.id)-\(UUID().uuidString)",

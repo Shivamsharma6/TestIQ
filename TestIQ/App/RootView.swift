@@ -39,6 +39,14 @@ struct RootView: View {
         }
         .animation(Motion.enabled ? Motion.settle : nil, value: state.route)
         .environment(\.colorScheme, .dark)
+        .alert("Progress needs attention", isPresented: Binding(
+            get: { state.saveWarning != nil },
+            set: { if !$0 { state.saveWarning = nil } }
+        )) {
+            Button("OK") { state.saveWarning = nil }
+        } message: {
+            Text(state.saveWarning ?? "")
+        }
     }
 
     private func slide(_ edge: Edge) -> AnyTransition {

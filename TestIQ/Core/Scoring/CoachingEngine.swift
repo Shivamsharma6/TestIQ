@@ -27,27 +27,24 @@ public enum CoachingEngine {
         assessment.growthAreas.compactMap { score in
             guard !covered.contains(score.domain) else { return nil }
             let knowledge = self.knowledge(for: score.domain)
-            let gap = assessment.compositeTheta - score.theta
             let replay = self.suggestedLevel(for: score.domain)
             let itemWord = score.itemCount == 1 ? "item" : "items"
-            let gapText = String(format: "%.2f", gap)
 
             let evidence: String
             if score.itemCount == 0 {
-                evidence = score.domain.title
-                    + " had no direct items — this axis is inferred from your speed profile."
+                evidence = "Your answer timing suggests this technique may be useful. "
+                    + "There are no direct " + score.domain.title.lowercased() + " items in this sample."
             } else {
-                evidence = "On " + score.domain.title
-                    + " you indexed " + String(Int(score.index)) + "/100 across "
-                    + String(score.itemCount) + " " + itemWord + " — " + gapText
-                    + " below your composite of " + String(Int(assessment.iqEstimate)) + " IQ points. "
-                    + score.domain.blurb
+                evidence = "You answered " + String(Int((score.accuracy * 100).rounded()))
+                    + "% correctly across " + String(score.itemCount) + " "
+                    + score.domain.title.lowercased() + " " + itemWord
+                    + " in the rounds used for coaching. Try this technique on your next round."
             }
 
             return CoachingTip(
                 id: UUID(),
                 kind: .domainWeakness,
-                title: "Lift your \(score.domain.shortTitle.lowercased()) ceiling",
+                title: "Build your \(score.domain.shortTitle.lowercased()) technique",
                 evidence: evidence,
                 technique: knowledge.technique,
                 drill: knowledge.drill,
@@ -75,15 +72,15 @@ public enum CoachingEngine {
                 ? "floor \(floors[0])"
                 : "floors " + floors.joined(separator: ", ")
             let evidence = "You missed \(cluster.count) \(label) \(cluster.count == 1 ? "item" : "items") on "
-                + where_ + ". That is a specific, repeating error rather than general difficulty."
+                + where_ + ". This gives you a specific puzzle technique to practice."
 
             return CoachingTip(
                 id: UUID(),
                 kind: .errorCluster,
-                title: "Stop repeating: \(label)",
+                title: "Try a new approach: \(label)",
                 evidence: evidence,
                 technique: self.clusterTechnique(cluster.tag, domain: cluster.domain),
-                drill: self.clusterDrill(cluster.kind, domain: cluster.domain),
+                drill: self.clusterDrill(cluster.kind, tag: cluster.tag, domain: cluster.domain),
                 pitfall: self.clusterPitfall(cluster.tag),
                 domain: cluster.domain,
                 suggestedLevelID: cluster.levelIDs.last
@@ -100,11 +97,11 @@ public enum CoachingEngine {
         return CoachingTip(
             id: UUID(),
             kind: .pacing,
-            title: "Your accuracy is losing to your clock",
-            evidence: "Correct answers consumed \(Int(speed.medianLatencyRatio * 100))% of the available time on average, while your overall accuracy sat at \(Int(assessment.overallAccuracy * 100))%. Speed and accuracy are both suffering, which is the signature of deliberating too long rather than not knowing.",
-            technique: "Commit-then-check. Give an item a hard internal deadline of about 60% of the allowance. If nothing clicks by then, pick your best-supported option and move on — the item is already banked as either a gain or a small loss, whereas hesitation wastes the whole allowance.",
-            drill: "Replay any floor at 70% speed. Answer everything, including the ones you are unsure about, the moment a plausible option appears. Track how many slow items were actually wrong: if few were, the hesitation was costing you points for nothing.",
-            pitfall: "Do not treat the timer as a measure of worth. An item you solve on the last second is worth the same as one you solve instantly, because the scoring only rewards speed as a modest bonus on top of correctness.",
+            title: "Find a comfortable pace",
+            evidence: "Correct answers used a median of \(Int(speed.medianLatencyRatio * 100))% of the available time. Accuracy across the coaching sample was \(Int(assessment.overallAccuracy * 100))%. Try a steady approach and watch accuracy before pushing for speed.",
+            technique: "Read, solve, check. Identify the rule first, eliminate one option, then check your choice before committing. A repeatable sequence of steps can make the timer feel more manageable.",
+            drill: "Replay an unlocked floor using the same steps on every item. Aim to match your accuracy first. After a few rounds, check the progress comparison to see whether correct answers are becoming quicker too.",
+            pitfall: "Rushing can trade accuracy for a small speed bonus. Take the time you need to understand the rule; the timer is a game constraint, not a measure of your worth.",
             domain: .speed,
             suggestedLevelID: assessment.levelBreakdown
                 .filter { $0.accuracy < assessment.overallAccuracy }
@@ -167,8 +164,8 @@ public enum CoachingEngine {
         case .speed:
             return Knowledge(
                 technique: "Front-load recognition. Most lost time is spent deliberating between two options that were never going to feel obviously right. Decide your default answer for each option type up front, so deliberation only happens when the options genuinely differ.",
-                drill: "One timed replay of any floor you have already completed. Aim to finish with at least 25% of the clock left, and afterwards check how many of your slowest answers were actually wrong. If the number is small, your hesitation is pure loss.",
-                pitfall: "Do not trade accuracy for speed deliberately. The scoring adds a modest speed bonus on top of a correct answer and subtracts nothing extra for a fast wrong one, so guessing early is still a net loss."
+                drill: "Replay a floor you know and use a consistent solve-then-check routine. Keep your accuracy steady. After several rounds, look for quicker correct answers in the progress comparison.",
+                pitfall: "A fast guess can miss the rule. Protect your accuracy first, then let pace develop with practice."
             )
         }
     }
@@ -204,6 +201,8 @@ public enum CoachingEngine {
 
     static func clusterTechnique(_ tag: String, domain: CognitiveDomain) -> String {
         switch tag {
+        case "shape-property":
+            return "Compare one shape attribute at a time: outline, fill, rotation, count, then arrangement. Name the property shared by all but one option, and check every shape against it before choosing the exception."
         case "alternating-difference":
             return "Alternating patterns must be read in two interleaved streams. Take the odd-positioned terms as one sequence and the even-positioned terms as another. Both are usually simple; the difficulty only appears when you insist on reading the whole run as one sequence."
         case "quadratic":
@@ -219,7 +218,7 @@ public enum CoachingEngine {
         case "echo-span":
             return "Chunk rather than itemise. Group the flashes into meaningful units of two or three and hold the chunks rather than the pieces. Recall is serial, so each extra tile costs disproportionately more than the same number of extra grid cells does."
         case "grid-position":
-            return "Say each flash as a named position as it appears — 'top row, far left'. Verbal labels survive far longer than a mental image, and a grid recall failure is nearly always a labelling failure rather than a memory failure."
+            return "Say each flash as a named position as it appears — 'top row, far left'. Try short labels alongside the visual pattern, then check which approach helps you recall the cells more reliably."
         case "matrix-rule", "matrix-attribute":
             return "Test the simplest rule first: constant, then one attribute stepping, then two attributes moving independently. State the rule as a single sentence and check it against every visible cell, not just the ones that produced it."
         case "percent-change":
@@ -237,13 +236,18 @@ public enum CoachingEngine {
         }
     }
 
-    private static func clusterDrill(_ kind: PuzzleKind, domain: CognitiveDomain) -> String {
+    private static func clusterDrill(_ kind: PuzzleKind, tag: String, domain: CognitiveDomain) -> String {
+        if tag == "shape-property" {
+            return "Replay the suggested floor. On each shape odd-one-out item, compare outline, fill, rotation, count, and arrangement separately. Say the shared property before tapping. On feedback, check whether the exception breaks that property; use the same passes on the next item."
+        }
         let base = self.knowledge(for: domain).drill
         return "Replays help most when you know what you are watching for. Do this: replay the suggested floor, and before each \(kind.title.lowercased()) item, say the technique above out loud. \(base)"
     }
 
     static func clusterPitfall(_ tag: String) -> String {
         switch tag {
+        case "shape-property":
+            return "A shape that catches your eye may still follow the rule. Check the same attribute across every option rather than comparing only the first two."
         case "alternating-difference":
             return "Do not read the whole run as one sequence. Interleaved runs look exactly like a single messy one until you split them by position."
         case "quadratic":
@@ -277,7 +281,7 @@ public enum CoachingEngine {
         case "probability-space":
             return "Do not reason about the proportion directly. Count the outcomes that satisfy the condition, count the total, and divide — skipping the enumeration is where the answer goes wrong."
         case "spatial-count":
-            return "Do not count by looking harder. Counting needs a sweep order, and without one your eye skips overlapping shapes every time."
+            return "Do not count by looking harder. Counting needs a sweep order, and a consistent order can help you keep track of overlapping shapes."
         default:
             return "Do not answer from recognition of how an answer looks. Work the rule through to the end, then choose."
         }

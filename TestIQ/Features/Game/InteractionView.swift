@@ -48,17 +48,17 @@ private struct ChoiceInteraction: View {
     var body: some View {
         LazyVGrid(columns: self.columns, spacing: 10) {
             ForEach(Array(self.puzzle.options.enumerated()), id: \.element.id) { index, option in
+                let tile = OptionTile(option: option, state: self.state(for: index),
+                                      accent: self.accent, answerNumber: index + 1)
                 Button {
                     model.choose(option: index)
                 } label: {
-                    OptionTile(
-                        option: option,
-                        state: self.state(for: index),
-                        accent: self.accent
-                    )
+                    tile
                 }
                 .buttonStyle(TileButtonStyle())
                 .disabled(model.phase != .awaitingAnswer)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(tile.accessibilityLabel)
             }
         }
         .animation(Motion.enabled ? Motion.snappy : nil, value: model.phase)
@@ -82,6 +82,7 @@ struct OptionTile: View {
     let option: PuzzleOption
     let state: State
     let accent: Color
+    let answerNumber: Int
 
     var body: some View {
         VStack(spacing: 8) {
@@ -115,7 +116,7 @@ struct OptionTile: View {
                     .frame(maxHeight: 74)
             }
 
-            if !self.option.title.isEmpty, !self.isShapeOrGrid {
+            if self.hasSupplementaryTitle {
                 Text(self.option.title)
                     .font(.app(.caption, size: 12, weight: .medium))
                     .foregroundStyle(Theme.textTertiary)
@@ -149,10 +150,12 @@ struct OptionTile: View {
         .accessibilityAddTraits(self.state == .correct ? [.isButton, .isSelected] : .isButton)
     }
 
-    private var isShapeOrGrid: Bool {
+    private var hasSupplementaryTitle: Bool {
+        guard !self.option.title.isEmpty else { return false }
         switch self.option.graphic {
-        case .shape, .grid: return true
-        case .none, .word, .number: return false
+        case .number(let value): return self.option.title != String(value)
+        case .word(let text): return self.option.title != text
+        case .none, .shape, .grid: return false
         }
     }
 
@@ -196,12 +199,16 @@ struct OptionTile: View {
         }
     }
 
-    private var accessibilityLabel: String {
+    var accessibilityLabel: String {
         var base = self.option.title
         if base.isEmpty {
             switch self.option.graphic {
             case .number(let value): base = "Option \(value)"
-            case .shape, .grid: base = "Shape option \(self.option.id.suffix(1))"
+            case .shape(let spec):
+                let displayedCount = spec.arrangement == .single ? 1 : max(1, min(spec.count, 9))
+                base = "Answer option \(self.answerNumber): \(displayedCount) \(spec.fill.rawValue) \(spec.shape.rawValue), \(spec.arrangement.rawValue), rotated \(spec.rotation) degrees"
+                if spec.handed < 0 { base += ", mirrored" }
+            case .grid: base = "Grid option \(self.answerNumber)"
             case .none, .word: base = "Option"
             }
         }
@@ -247,7 +254,7 @@ private struct EchoInteraction: View {
                         .font(.app(.caption, size: 12, weight: .medium))
                         .foregroundStyle(Theme.textTertiary)
                     HStack(spacing: 6) {
-                        ForEach(model.expectedOptionIndices ?? [], id: \.self) { index in
+                        ForEach(Array((model.expectedOptionIndices ?? []).enumerated()), id: \.offset) { _, index in
                             Text("\(index + 1)")
                                 .font(.mono(13, weight: .bold))
                                 .foregroundStyle(Theme.correct)

@@ -10,7 +10,9 @@ let package = Package(
     targets: [
         .target(
             name: "IQCore",
-            path: "TestIQ/Core",
+            path: "TestIQ",
+            exclude: ["App", "Components", "Design", "Features", "Assets.xcassets", "Info.plist", "Services/AppState.swift", "Services/SoundEngine.swift", "Services/HapticsEngine.swift"],
+            sources: ["Core", "Services/ProgressStore.swift"],
             // Matches SWIFT_VERSION = 5.0 in the Xcode target, so the two build systems
             // agree on concurrency semantics and cannot disagree about what compiles.
             swiftSettings: [.swiftLanguageMode(.v5)]

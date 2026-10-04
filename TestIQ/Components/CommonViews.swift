@@ -47,7 +47,9 @@ struct PrimaryButton: View {
                 Text(self.title).font(.app(.headline, size: 17, weight: .bold))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 54)
             .foregroundStyle(self.isEnabled ? Color.black.opacity(0.85) : Theme.textTertiary)
             .background {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -84,7 +86,9 @@ struct QuietButton: View {
                 Text(self.title).font(.app(.subheadline, size: 15, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: Theme.Metrics.minTarget)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .frame(minHeight: Theme.Metrics.minTarget)
             .foregroundStyle(Theme.textSecondary)
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)

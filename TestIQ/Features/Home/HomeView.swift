@@ -1,103 +1,237 @@
 import SwiftUI
 
-/// The title screen and level map.
+/// Play comes first; records, rewards, and the entire climb remain one scroll away.
 struct HomeView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showSettings = false
     @State private var showAbout = false
-    @State private var hasScrolled = false
 
-    private var progress: PlayerProgress { app.progress }
+    private var progress: PlayerProgress { self.app.progress }
+    private var nextLevel: LevelDefinition {
+        LevelCatalog.level(self.progress.nextLevelID) ?? LevelCatalog.all[0]
+    }
+    private var challengeLevel: LevelDefinition? {
+        if self.progress.personalBestScore(for: self.nextLevel.id) != nil { return self.nextLevel }
+        let latest = self.progress.attemptHistory.max { $0.completedAt < $1.completedAt }
+            ?? self.progress.bestResults.max { $0.completedAt < $1.completedAt }
+        return latest.flatMap { LevelCatalog.level($0.levelID) }
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-        ScrollView {
-            VStack(spacing: 20) {
-                header
-                summaryStrip
-
-                if app.progress.hasFinishedAscent || app.progress.levelsWithResults > 0 {
-                    reportCard
+        ZStack {
+            ArcadeBackdrop()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    self.header
+                    self.playCard
+                    self.challengeCard
+                    self.rewardsCard
+                    self.progressButton
+                    VStack(alignment: .leading, spacing: 16) {
+                        SectionHeading(title: "The climb", subtitle: "Clear a floor. Unlock the next. Replay for glory.")
+                        LevelPathView(progress: self.progress) { self.app.open($0) }
+                    }
+                    Text("A little practice. A new personal best.")
+                        .font(.system(.footnote, design: .rounded, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
                 }
-
-                LevelPathView(progress: self.progress) { levelID in
-                    self.app.open(levelID)
-                }
-                .id(1)
-
-                footer
+                .padding(.horizontal, Theme.Metrics.gutter)
+                .padding(.top, 14)
+                .padding(.bottom, 32)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, Theme.Metrics.gutter)
-            .padding(.bottom, 40)
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
-        .background(Theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(isPresented: $showSettings) { SettingsSheet() }
-        .sheet(isPresented: $showAbout) { AboutSheet() }
-        // The path climbs bottom to top, so a returning player would otherwise land on a
-        // screen full of locked floors. Jump straight to where they actually are.
-        .onAppear {
-            guard !self.hasScrolled else { return }
-            self.hasScrolled = true
-            let target = self.app.progress.isUnlocked(self.app.progress.nextLevelID)
-                ? self.app.progress.nextLevelID
-                : self.app.progress.nextLevelID
-            withAnimation(Motion.enabled ? Motion.gentle : nil) {
-                proxy.scrollTo(target, anchor: .center)
+        .sheet(isPresented: self.$showSettings) { SettingsSheet() }
+        .sheet(isPresented: self.$showAbout) { AboutSheet() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 21, weight: .black))
+                    .foregroundStyle(Theme.lime)
+                Text("ASCENT")
+                    .font(.system(.title2, design: .rounded, weight: .black))
+                    .tracking(2)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
             }
-        }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Ascent")
+            .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            self.iconButton("info", label: "About Ascent") { self.showAbout = true }
+            self.iconButton("slider.horizontal.3", label: "Settings") { self.showSettings = true }
         }
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        VStack(spacing: 14) {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("IQ ASCENT")
-                        .font(.app(.largeTitle, size: 32, weight: .heavy))
-                        .tracking(1.5)
+    private var playCard: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ArcadeEyebrow(text: self.progress.hasFinishedAscent ? "Summit unlocked" : "Your next challenge")
+                    Text(self.progress.hasFinishedAscent ? "Top that." : "Onward.\nUpward.")
+                        .font(.system(.largeTitle, design: .rounded, weight: .black))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Ten floors. One mind.")
-                        .font(.app(.footnote, size: 13, weight: .medium))
-                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                Spacer()
-
-                HStack(spacing: 8) {
-                    iconButton("gearshape", label: "Settings") { self.showSettings = true }
-                    iconButton("info.circle", label: "About this test") { self.showAbout = true }
+                Spacer(minLength: 0)
+                if !self.dynamicTypeSize.isAccessibilitySize {
+                    ArcadeFloorEmblem(symbol: "arrow.up.forward", size: 78)
+                        .padding(.top, 8)
                 }
             }
 
-            if self.progress.clearedCount == 0, !self.progress.hasSeenIntro {
-                GlassCard(tint: Theme.accent) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("How this works", systemImage: "sparkles")
-                            .font(.app(.headline, size: 15, weight: .bold))
-                            .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("FLOOR \(self.nextLevel.id)  /  \(LevelCatalog.count)")
+                    .font(.system(.caption, design: .monospaced, weight: .bold))
+                    .foregroundStyle(Theme.lime)
+                Text(self.nextLevel.name)
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("\(self.nextLevel.itemCount) puzzles · \(self.nextLevel.isAdaptive ? "Mixed skills" : self.nextLevel.domain.shortTitle)")
+                    .font(.system(.subheadline, design: .rounded, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .accessibilityElement(children: .combine)
 
-                        Text("""
-                        Each floor is one kind of thinking — patterns, numbers, words, logic, \
-                        memory, space, abstraction. Difficulty climbs every floor, and floors 9 \
-                        and 10 adapt to how you are actually doing.
-
-                        At the top you get a full assessment: an estimated IQ with a confidence \
-                        range, a breakdown of all eight abilities, and specific techniques for \
-                        whatever you are weakest at.
-                        """)
-                        .font(.app(.subheadline, size: 14, weight: .medium))
-                        .foregroundStyle(Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .appearIn(0.05)
+            PrimaryButton(
+                title: self.progress.hasFinishedAscent ? "Play the summit" : "Play floor \(self.nextLevel.id)",
+                systemImage: "play.fill", tint: Theme.lime
+            ) {
+                self.app.open(self.nextLevel.id)
             }
         }
-        .padding(.top, 12)
+        .padding(24)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.Metrics.cornerLarge, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.surfaceRaised, Theme.surface], startPoint: .topTrailing, endPoint: .bottomLeading))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.Metrics.cornerLarge, style: .continuous)
+                        .strokeBorder(Theme.lime.opacity(0.26), lineWidth: 1)
+                }
+        }
+    }
+
+    private var challengeCard: some View {
+        GlassCard(padding: 18, tint: Theme.violet) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Image(systemName: "flag.checkered")
+                    Text("YOU VS. YOUR BEST")
+                        .tracking(1.1)
+                }
+                .font(.system(.caption2, design: .rounded, weight: .heavy))
+                .foregroundStyle(Theme.violet)
+
+                if let level = self.challengeLevel,
+                   let score = self.progress.personalBestScore(for: level.id) {
+                    HStack(alignment: .center, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(score.formatted()) pts")
+                                .font(.system(.title2, design: .rounded, weight: .heavy).monospacedDigit())
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("Floor \(level.id) · \(level.name)")
+                                .font(.system(.footnote, design: .rounded, weight: .medium))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button {
+                            HapticsEngine.shared.tap()
+                            self.app.open(level.id)
+                        } label: {
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(.headline, weight: .bold))
+                                .foregroundStyle(Theme.violet)
+                                .frame(width: 48, height: 48)
+                                .background(Theme.violet.opacity(0.13), in: RoundedRectangle(cornerRadius: 15))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Challenge your personal best on floor \(level.id), \(level.name)")
+                        .accessibilityHint("Your record is \(score) points")
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Fresh start. Empty scoreboard.")
+                            .font(.system(.headline, design: .rounded, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Finish your first floor. Give yourself a score to chase.")
+                            .font(.system(.subheadline, design: .rounded))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var rewardsCard: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack {
+                ArcadeEyebrow(text: "The trophy shelf", tint: Theme.textTertiary)
+                Spacer()
+                Label("\(self.progress.totalStars)/\(self.progress.maxStars)", systemImage: "star.fill")
+                    .font(.system(.subheadline, design: .rounded, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(Theme.hint)
+                    .accessibilityLabel("\(self.progress.totalStars) of \(self.progress.maxStars) stars earned")
+            }
+            HStack(spacing: 6) {
+                ForEach(LevelCatalog.all) { level in
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(self.progress.isCleared(level.id) ? Theme.lime : Theme.surfaceRaised)
+                        .frame(height: 8)
+                }
+            }
+            .accessibilityHidden(true)
+            HStack {
+                Text("\(self.progress.clearedCount) of \(LevelCatalog.count) floors cleared")
+                Spacer()
+                Text("\(self.progress.completedRunCount) rounds")
+            }
+            .font(.system(.caption, design: .rounded, weight: .medium))
+            .foregroundStyle(Theme.textSecondary)
+        }
+    }
+
+    private var progressButton: some View {
+        Button {
+            HapticsEngine.shared.tap()
+            self.app.openReport()
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "chart.xyaxis.line")
+                    .font(.system(.title3, weight: .bold))
+                    .foregroundStyle(Theme.violet)
+                    .frame(width: 42, height: 42)
+                    .background(Theme.violet.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Your progress")
+                        .font(.system(.headline, design: .rounded, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Real rounds. Personal records. Better practice.")
+                        .font(.system(.caption, design: .rounded))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(.caption, weight: .bold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .multilineTextAlignment(.leading)
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 76)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Metrics.corner))
+        }
+        .buttonStyle(TileButtonStyle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Open your practice progress and personal records")
     }
 
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -109,85 +243,16 @@ struct HomeView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: Theme.Metrics.minTarget, height: Theme.Metrics.minTarget)
-                .background { Circle().fill(Theme.surface) }
+                .background(Theme.surface, in: Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
-
-    // MARK: - Summary
-
-    private var summaryStrip: some View {
-        GlassCard(padding: 14) {
-            HStack(spacing: 0) {
-                StatTile(value: "\(self.progress.clearedCount)/\(LevelCatalog.count)",
-                         label: "Floors cleared")
-                Divider().frame(height: 34).overlay(Theme.stroke)
-                StatTile(value: "\(self.progress.totalStars)/\(self.progress.maxStars)",
-                         label: "Stars earned", tint: Theme.hint)
-                Divider().frame(height: 34).overlay(Theme.stroke)
-                StatTile(
-                    value: self.progress.lastAssessment.map { String(Int($0.iqEstimate.rounded())) } ?? "—",
-                    label: "Estimated IQ",
-                    tint: Theme.accent
-                )
-            }
-        }
-    }
-
-    private var reportCard: some View {
-        Button {
-            HapticsEngine.shared.tap()
-            self.app.openReport()
-        } label: {
-            GlassCard(tint: Theme.accent) {
-                HStack(spacing: 14) {
-                    Image(systemName: "chart.dots.scatter")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(Theme.accent)
-                        .frame(width: 42, height: 42)
-                        .background { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.accent.opacity(0.14)) }
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Your assessment")
-                            .font(.app(.headline, size: 16, weight: .bold))
-                            .foregroundStyle(Theme.textPrimary)
-                        Text("\(self.progress.levelsWithResults) floors analysed · updated after every floor")
-                            .font(.app(.caption, size: 12, weight: .medium))
-                            .foregroundStyle(Theme.textTertiary)
-                            .multilineTextAlignment(.leading)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-            }
-        }
-        .buttonStyle(TileButtonStyle())
-        .accessibilityLabel("Open your assessment report")
-    }
-
-    private var footer: some View {
-        VStack(spacing: 10) {
-            Text("Scores are estimates, not clinical measurements. Every report states its own confidence range.")
-                .font(.app(.caption2, size: 11, weight: .medium))
-                .foregroundStyle(Theme.textTertiary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity)
-    }
 }
 
 extension PlayerProgress {
-    /// How many floors have produced any recorded result, cleared or not.
     var levelsWithResults: Int { self.levelResults.count }
 }
-
-// MARK: - Settings
 
 private struct SettingsSheet: View {
     @Environment(AppState.self) private var app
@@ -198,59 +263,52 @@ private struct SettingsSheet: View {
         NavigationStack {
             Form {
                 Section("Feedback") {
-                    Toggle(isOn: Binding(
-                        get: { app.progress.soundEnabled },
-                        set: { app.setSound($0) }
-                    )) {
+                    Toggle(isOn: Binding(get: { self.app.progress.soundEnabled }, set: { self.app.setSound($0) })) {
                         Label("Sound effects", systemImage: "speaker.wave.2.fill")
                     }
-                    Toggle(isOn: Binding(
-                        get: { app.progress.hapticsEnabled },
-                        set: { app.setHaptics($0) }
-                    )) {
+                    Toggle(isOn: Binding(get: { self.app.progress.hapticsEnabled }, set: { self.app.setHaptics($0) })) {
                         Label("Haptics", systemImage: "iphone.radiowaves.left.and.right")
                     }
+                    Text("Animations follow your device’s Reduce Motion setting.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-
                 Section {
-                    LabeledContent("Floors cleared", value: "\(app.progress.clearedCount) of \(LevelCatalog.count)")
-                    LabeledContent("Stars earned", value: "\(app.progress.totalStars) of \(app.progress.maxStars)")
-                    LabeledContent("Floors analysed", value: "\(app.progress.levelsWithResults)")
+                    LabeledContent("Floors cleared", value: "\(self.app.progress.clearedCount) of \(LevelCatalog.count)")
+                    LabeledContent("Stars earned", value: "\(self.app.progress.totalStars) of \(self.app.progress.maxStars)")
+                    LabeledContent("Completed rounds", value: "\(self.app.progress.completedRunCount)")
                 } header: {
                     Text("Progress")
                 } footer: {
                     Text("Progress is stored on this device only. Nothing is uploaded.")
                 }
-
                 Section {
-                    Button(role: .destructive) {
-                        self.confirmReset = true
-                    } label: {
+                    Button(role: .destructive) { self.confirmReset = true } label: {
                         Label("Reset all progress", systemImage: "arrow.counterclockwise")
                     }
                 }
             }
+            .tint(Theme.violet)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { self.dismiss() }
+                        .frame(minWidth: 44, minHeight: 44)
                 }
             }
-            .alert("Reset everything?", isPresented: $confirmReset) {
+            .alert("Reset everything?", isPresented: self.$confirmReset) {
                 Button("Cancel", role: .cancel) {}
                 Button("Reset", role: .destructive) {
-                    app.resetEverything()
+                    self.app.resetEverything()
                     self.dismiss()
                 }
             } message: {
-                Text("Every star, floor and report will be deleted. This cannot be undone.")
+                Text("Every star, personal record, and saved round will be deleted. This cannot be undone.")
             }
         }
     }
 }
-
-// MARK: - About
 
 private struct AboutSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -259,71 +317,40 @@ private struct AboutSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    GlassCard(tint: Theme.accent) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("What the number means", systemImage: "function")
-                                .font(.app(.headline, size: 16, weight: .bold))
-                                .foregroundStyle(Theme.accent)
-                            Text("""
-                            Every puzzle carries a difficulty value on a shared scale, where 2.8 is \
-                            defined as population average. Your answers build an estimate of your \
-                            ability on that scale, which is then converted to the familiar \
-                            mean-100, standard-deviation-15 scale people mean by "IQ".
-
-                            The report always shows a confidence range alongside the estimate, and \
-                            refuses to name a band when that range crosses a boundary. A short or \
-                            inconsistent run produces a wide range on purpose — that is the honest \
-                            answer, not a flaw.
-                            """)
-                            .font(.app(.subheadline, size: 14, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("How speed is scored", systemImage: "speedometer")
-                                .font(.app(.headline, size: 16, weight: .bold))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text("""
-                            Speed is a small bonus on top of a correct answer, and never a penalty \
-                            of its own. Answering wrong fast scores exactly zero, so guessing is \
-                            never a good trade. Deliberating past a certain point *is* penalised, \
-                            simply by the time you no longer have left to answer with.
-                            """)
-                            .font(.app(.subheadline, size: 14, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    GlassCard {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label("Your puzzles are generated", systemImage: "wand.and.stars")
-                                .font(.app(.headline, size: 16, weight: .bold))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text("""
-                            Nothing is picked from a fixed question bank. Sequences, matrices, \
-                            rotations and folded-paper items are all constructed to a difficulty \
-                            you specify, which is why the ramp can be this precise and why no two \
-                            runs are identical.
-                            """)
-                            .font(.app(.subheadline, size: 14, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    self.aboutCard("A game for your grey matter", symbol: "brain.head.profile", text:
+                        "Climb ten floors of patterns, numbers, words, logic, memory, and spatial puzzles. Learn a technique, keep a combo alive, and give your personal best some competition.")
+                    self.aboutCard("Points with a purpose", symbol: "bolt.fill", text:
+                        "Correct answers earn points. Quicker correct answers and consecutive hits earn more; hints reduce your score. Stars reward accuracy, with pace needed for the third star. Replays keep your earned rewards safe.")
+                    self.aboutCard("Practice, in perspective", symbol: "chart.xyaxis.line", text:
+                        "Your progress describes performance in this game. These puzzles are not a validated IQ test, and a game score cannot measure your intelligence. Practice trends compare recorded rounds only when enough similar puzzles are available.")
+                    self.aboutCard("Your next attempt", symbol: "arrow.clockwise", text:
+                        "Replays generate new puzzle sets, though some patterns may recur. The final two floors can use your previous results to choose a starting difficulty. A round’s puzzle set is fixed before play begins.")
                 }
                 .padding(Theme.Metrics.gutter)
             }
             .background(Theme.background)
-            .navigationTitle("About")
+            .navigationTitle("About Ascent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { self.dismiss() }
+                        .frame(minWidth: 44, minHeight: 44)
                 }
+            }
+        }
+        .tint(Theme.lime)
+    }
+
+    private func aboutCard(_ title: String, symbol: String, text: String) -> some View {
+        GlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(title, systemImage: symbol)
+                    .font(.system(.headline, design: .rounded, weight: .bold))
+                    .foregroundStyle(Theme.lime)
+                Text(text)
+                    .font(.system(.subheadline, design: .rounded))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

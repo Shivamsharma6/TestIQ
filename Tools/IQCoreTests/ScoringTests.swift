@@ -263,6 +263,22 @@ final class ScoringEngineTests: XCTestCase {
 }
 
 final class CoachingEngineTests: XCTestCase {
+    func testShapeErrorClusterTeachesShapeComparisonInsteadOfNumberSequences() {
+        let items = (0..<3).map { index in
+            ItemResult(id: "shape-\(index)", levelID: 1, kind: .oddOneOut, domain: .pattern,
+                       theta: 1, skillTag: "shape-property", correct: false,
+                       elapsed: 8, timeLimit: 28, hintsUsed: 0)
+        }
+        let assessment = ScoringEngine.assess(RunSummary(levelResults: [
+            LevelResult(id: "shape-round", levelID: 1, items: items, stars: 0, score: 0, bestStreak: 0)
+        ]))
+        let tip = CoachingEngine.tips(for: assessment).first { $0.kind == .errorCluster }
+        XCTAssertNotNil(tip)
+        XCTAssertTrue(tip?.technique.contains("shape") == true)
+        XCTAssertFalse(tip?.technique.lowercased().contains("difference ladder") == true)
+        XCTAssertFalse(tip?.drill.lowercased().contains("number sequence") == true)
+    }
+
     func testEveryDomainHasCompleteSpecificAdvice() {
         for domain in CognitiveDomain.allCases {
             let advice = CoachingEngine.knowledge(for: domain)

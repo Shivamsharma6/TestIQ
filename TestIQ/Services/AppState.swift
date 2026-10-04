@@ -12,6 +12,10 @@ final class AppState {
     var progress: PlayerProgress
     var route: Route = .home
     var assessment: Assessment?
+    /// The round just played, distinct from the profile's lifetime records.
+    private(set) var lastResult: LevelResult?
+    private(set) var previousBestScore: Int?
+    var saveWarning: String?
     /// Bumped whenever progress changes so views that read it refresh.
     private(set) var revision = 0
 
@@ -30,7 +34,10 @@ final class AppState {
         self.store = resolved
         self.progress = resolved.load()
         self.assessment = self.progress.lastAssessment
+        self.saveWarning = resolved.lastError
+        #if DEBUG
         self.applyDebugLaunchRoute()
+        #endif
     }
 
     #if DEBUG
@@ -51,17 +58,30 @@ final class AppState {
             self.recomputeAssessment()
             self.route = .report
         case "game":
-            let levelID = arguments.contains("-uiLevel")
-                ? Int(arguments[(arguments.firstIndex(of: "-uiLevel") ?? 0) + 1]) ?? 1
-                : 1
+            let levelID = self.debugLevelID(arguments)
+            guard LevelCatalog.level(levelID) != nil else { return }
             self.progress.unlockedLevelID = max(self.progress.unlockedLevelID, levelID)
             self.route = .game(levelID: levelID, attempt: 0)
         case "intro":
-            let levelID = Int(value.split(separator: ":").last.map(String.init) ?? "") ?? 1
+            let levelID = self.debugLevelID(arguments)
+            guard LevelCatalog.level(levelID) != nil else { return }
             self.route = .levelIntro(levelID)
+        case "results":
+            let levelID = self.debugLevelID(arguments)
+            guard let latest = self.progress.latestResult(for: levelID) else { return }
+            self.lastResult = latest
+            self.previousBestScore = self.progress.attemptHistory
+                .filter { $0.levelID == levelID && $0.id != latest.id }.map(\.score).max()
+            self.route = .levelComplete(levelID)
         default:
             break
         }
+    }
+
+    private func debugLevelID(_ arguments: [String]) -> Int {
+        guard let index = arguments.firstIndex(of: "-uiLevel"),
+              arguments.indices.contains(index + 1) else { return 1 }
+        return Int(arguments[index + 1]) ?? 1
     }
     #endif
 
@@ -73,13 +93,22 @@ final class AppState {
     }
 
     func start(_ levelID: Int) {
-        let attempt = self.progress.attempts(for: levelID)
+        guard self.progress.isUnlocked(levelID) else { return }
+        let attempt = self.progress.attempts(for: levelID) + 1
+        self.lastResult = nil
+        self.previousBestScore = nil
         self.route = .game(levelID: levelID, attempt: attempt)
     }
 
     func finish(_ result: LevelResult) {
+        guard self.lastResult?.id != result.id else { return }
+        self.previousBestScore = self.progress.personalBestScore(for: result.levelID)
         self.store.record(result)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
+        self.lastResult = self.progress.latestResult(for: result.levelID)
+        self.saveWarning = self.store.lastError
+        self.recomputeAssessment()
         self.revision += 1
         self.route = .levelComplete(result.levelID)
     }
@@ -93,20 +122,19 @@ final class AppState {
         self.route = .report
     }
 
-    /// Recomputes the report from every stored attempt. Called whenever the report opens
-    /// so it always reflects the player's current best results rather than a snapshot
-    /// taken at the moment they first reached the summit.
+    /// Coaching reflects the most recent result per floor, with legacy bests as fallback.
     func recomputeAssessment() {
         guard !self.progress.levelResults.isEmpty else {
             self.assessment = .empty
             return
         }
-        let fresh = ScoringEngine.assess(self.progress.summary)
+        let fresh = ScoringEngine.assess(self.progress.recentSummary)
         self.assessment = fresh
         var updated = self.progress
         updated.lastAssessment = fresh
         self.store.save(updated)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
         self.revision += 1
     }
 
@@ -116,6 +144,7 @@ final class AppState {
         updated.lastAssessment = assessment
         self.store.save(updated)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
         self.revision += 1
     }
 
@@ -127,13 +156,16 @@ final class AppState {
         SoundEngine.shared.isEnabled = enabled
         self.store.save(updated)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
     }
 
     func setHaptics(_ enabled: Bool) {
         var updated = self.progress
         updated.hapticsEnabled = enabled
+        HapticsEngine.shared.isEnabled = enabled
         self.store.save(updated)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
     }
 
     func markIntroSeen() {
@@ -142,12 +174,29 @@ final class AppState {
         updated.hasSeenIntro = true
         self.store.save(updated)
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
+    }
+
+    func markInteractionLearned(_ key: String) {
+        guard !self.progress.learnedInteractions.contains(key) else { return }
+        var updated = self.progress
+        updated.learnedInteractions.insert(key)
+        updated.hasSeenIntro = true
+        self.store.save(updated)
+        self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
     }
 
     func resetEverything() {
         self.store.reset()
         self.progress = self.store.load()
+        self.saveWarning = self.store.lastError
+        SoundEngine.shared.isEnabled = self.progress.soundEnabled
+        HapticsEngine.shared.isEnabled = self.progress.hapticsEnabled
         self.assessment = nil
+        self.lastResult = nil
+        self.previousBestScore = nil
+        self.saveWarning = self.store.lastError
         self.revision += 1
         self.route = .home
     }
