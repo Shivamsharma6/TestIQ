@@ -20,6 +20,7 @@ final class SoundEngine {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var isRunning = false
+    private var isStarting = false
     /// False when the audio graph could not be built or the platform has no output
     /// device. Once that is known, no further attempts are made: `scheduleBuffer` raises
     /// an Objective-C exception rather than returning an error, so it must never be
@@ -37,18 +38,64 @@ final class SoundEngine {
             return
         }
         self.isGraphUsable = (try? engine.connectNode(player, to: engine.mainMixerNode, format: format)) != nil
+
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
     }
 
-    func startIfNeeded() {
-        guard !self.isRunning, self.isGraphUsable else { return }
+    /// Moves AVAudioSession configuration off the main thread to eliminate Xcode
+    /// Thread Performance Checker "AVAudioSession Hang Risk" warnings and UI stutters.
+    nonisolated private static func configureSessionInBackground() {
         let session = AVAudioSession.sharedInstance()
         // `.ambient` means a puzzle game's audio ducks politely under music instead of
         // interrupting it, which is what players expect.
         try? session.setCategory(.ambient, options: [.mixWithOthers])
         try? session.setActive(true)
-        guard (try? engine.start()) != nil else { return }
-        try? player.playAudio()
-        self.isRunning = self.engine.isRunning && self.player.isPlaying
+    }
+
+    func prepare() {
+        self.startIfNeeded()
+    }
+
+    func startIfNeeded() {
+        guard !self.isRunning, !self.isStarting, self.isGraphUsable, self.isEnabled else { return }
+        self.isStarting = true
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            Self.configureSessionInBackground()
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                defer { self.isStarting = false }
+                guard !self.isRunning, self.isGraphUsable, self.isEnabled else { return }
+
+                do {
+                    if !self.engine.isRunning {
+                        try self.engine.start()
+                    }
+                    if !self.player.isPlaying {
+                        if (try? self.player.playAudio()) == nil {
+                            self.player.play()
+                        }
+                    }
+                    self.isRunning = self.engine.isRunning && self.player.isPlaying
+                } catch {
+                    self.isRunning = false
+                }
+            }
+        }
+    }
+
+    private func handleConfigurationChange() {
+        self.isRunning = false
+        if self.isEnabled {
+            self.startIfNeeded()
+        }
     }
 
     // MARK: - Cues
@@ -148,8 +195,11 @@ final class SoundEngine {
         // Every condition is re-checked immediately before scheduling. `scheduleBuffer`
         // raises an uncaught Objective-C exception when the node is not playing, so this
         // guard is load-bearing rather than defensive.
-        guard self.isGraphUsable, self.engine.isRunning, self.player.isPlaying else { return }
         self.player.scheduleBuffer(buffer, at: nil, options: .interrupts)
-        try? self.player.playAudio()
+        if !self.player.isPlaying {
+            if (try? self.player.playAudio()) == nil {
+                self.player.play()
+            }
+        }
     }
 }

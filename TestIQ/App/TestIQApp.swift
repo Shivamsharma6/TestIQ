@@ -6,6 +6,7 @@ struct TestIQApp: App {
 
     init() {
         SoundEngine.shared.isEnabled = ProgressStore.shared.load().soundEnabled
+        SoundEngine.shared.prepare()
         HapticsEngine.shared.prepare()
     }
 
